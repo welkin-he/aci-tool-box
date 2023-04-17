@@ -1,0 +1,744 @@
+#!/usr/bin/python3
+import requests
+import re
+import urllib3
+import argparse
+import logging.handlers
+import logging
+import sys
+import threading
+import subprocess
+import shlex
+import os
+import json
+import getpass
+from datetime import datetime
+
+urllib3.disable_warnings()
+
+logger = logging.getLogger(__name__)
+fabric_domain = ''
+LOG_OLD_THAN = 15
+
+def get_cmd(*cmd, **kwargs):
+    """Simple interface to subprocess.Pipe()
+       cmd: list of command params
+       prints output on success"""
+    cmd = " ".join(cmd)
+
+    shell = kwargs.get('shell', True)
+    if not shell:
+        cmd = shlex.split(cmd)
+
+    proc = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out = proc.stdout.readlines()
+    return out
+
+
+def setup_logger(logger, level,logfile):
+    logging_level = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warn": logging.WARNING,
+    }.get(level, logging.DEBUG)
+    logger.setLevel(logging_level)
+    logger_handler = logging.StreamHandler()
+    fmt = "%(asctime)s.%(msecs).03d||%(levelname)s||"
+    fmt += "(%(lineno)d)||%(message)s"
+    logger_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt="%Z %Y-%m-%dT%H:%M:%S"))
+    logger.addHandler(logger_handler)
+
+    filehandler = logging.FileHandler(logfile)
+    filehandler.setLevel(logging_level)
+    filehandler.setFormatter(logging.Formatter(
+        fmt=fmt,
+        datefmt="%Z %Y-%m-%dT%H:%M:%S")
+    )
+    logger.addHandler(filehandler)
+
+
+class TimerCb:
+    def __init__(self, delay, callback, args=None):
+        self.delay = delay
+        self.callback = callback
+        self.args = args
+        self.timer = None
+
+    def start(self):
+        self.timer = threading.Timer(self.delay, self._run_callback)
+        self.timer.start()
+
+    def cancel(self):
+        if self.timer:
+            self.timer.cancel()
+
+    def _run_callback(self):
+        self.callback(*self.args)
+        self.start()
+
+
+class APIC:
+    def __init__(self, ipaddr, user_name, user_passwd, ):
+        self.nodeDict = {}
+        self.apic_ip = ipaddr
+        self.auth_result = None
+        self.user_name = user_name
+        self.user_passwd = user_passwd
+        self.fabric_domain = ""
+        self.auth = {
+            'aaaUser': {
+                'attributes': {
+                    'name': user_name,
+                    'pwd': user_passwd
+                }
+            }
+        }
+        self.api_url = "https://" + apic_ip + "/api/"
+        self.work()
+
+    def work(self):
+        self.auth_result = self.authenticate()
+        return self
+
+    def authenticate(self):
+        url = self.api_url + '/aaaLogin.json?gui-token-request=yes'
+        try:
+            resp = requests.post(url, json=self.auth, headers={'Content-type': 'application/json'}, verify=False)
+            logger.debug("Authentication Response: {}".format(resp))
+        except Exception as e:
+            logger.debug('Failed to authenticate: {}'.format(e))
+            sys.exit("")
+
+        if resp.ok:
+            apic_cookies = resp.cookies
+            attributes = resp.json()['imdata'][0]['aaaLogin']['attributes']
+            devcookie = attributes['token']
+            apic_challenge = attributes['urlToken']
+            return apic_cookies, devcookie, apic_challenge
+        else:
+            logger.error('Incorrect Credential,Failed to authenticate')
+            sys.exit(1)
+            return None
+
+    def get_policy(self, url):
+        if len(self.auth_result) == 3:
+            auth_result = self.auth_result
+            saved_cookies = auth_result[0]
+            devcookie = auth_result[1]
+            apic_challenge = auth_result[2]
+            head = {
+                "Accept": "*/*",
+                "DevCookie": devcookie,
+                "APIC-challenge": apic_challenge
+            }
+            r = requests.get('%s%s' % (self.api_url, url), cookies=saved_cookies, headers=head, verify=False)
+            if r.status_code == requests.codes.ok:
+                return r.json()
+            else:
+                logger.error("fail to get policy for %s%s" % (self.api_url, url))
+        return None
+
+    def get_name_list_with_ip(self):
+        logger.info("Build Fabric List")
+
+        topSystemMo = self.get_policy('class/topSystem.json')
+        if topSystemMo is None:
+            logger.info("Failed to Get topSystemMo Policy")
+            sys.exit(0)
+            return
+        else:
+            topSystemData = topSystemMo.get('imdata')
+            for MoEntry in topSystemData:
+                attr = MoEntry.get("topSystem").get("attributes")
+                node_id = attr.get('id')
+                oob_addr = attr.get('oobMgmtAddr')
+                if oob_addr == '0.0.0.0':
+                    logger.warning("Skip: Node %s OOB mgmt address is not configured", node_id)
+                    continue
+                inb_addr = attr.get('inbMgmtAddr')
+                fabric_domain = attr.get('fabricDomain')
+                self.fabric_domain = fabric_domain
+                role = attr.get('role')
+                node_version = attr.get('version')
+                if "-" in node_version:
+                    node_version = str(node_version).split("-")[1].rstrip(')').replace('(', '-')
+                if 'fabricDomain' not in self.nodeDict:
+                    self.nodeDict['fabricDomain'] = fabric_domain
+                if node_id not in self.nodeDict:
+                    self.nodeDict[node_id] = {}
+                    self.nodeDict[node_id]['role'] = role
+                    self.nodeDict[node_id]['inbMgmtAddr'] = inb_addr
+                    self.nodeDict[node_id]['oobMgmtAddr'] = oob_addr
+                    self.nodeDict[node_id]['version'] = node_version
+    def save_fnode_json(self):
+        fnode_json_file = self.fabric_domain + '/fabric_node.json'
+        if not os.path.exists(self.fabric_domain):
+            os.makedirs(self.fabric_domain, exist_ok=True)
+        if not os.path.exists(fnode_json_file):
+            try:
+                with open(fnode_json_file, "w") as f:
+                    json.dump(self.nodeDict, f)
+                f.close()
+            except Exception as e:
+                logger.error("failed to save json file(%s): %s", fnode_json_file, e)
+
+def load_json_fnode(fnode_json_file):
+    logger.info("loading json file: %s", fnode_json_file)
+    results = {}
+    if os.path.exists(fnode_json_file):
+        try:
+            with open(fnode_json_file, "r") as f:
+                results = json.load(f)
+        except Exception as e:
+            logger.error("failed to read json file(%s): %s", fnode_json_file, e)
+    logger.info("%s records loaded from %s", len(results), fnode_json_file)
+    return results
+
+class LogFileSyncer:
+    def __init__(self, node_id, targetIp, user_name, version):
+        self.user_name = user_name
+        self.fabric_name = fabric_domain
+        self.node_id = node_id
+        self.version = version
+        self.active_dir = ""
+        self.archive_dir = ""
+        self.targetIp = targetIp
+        self.old_file_seq_reg = r'(?P<logname>.*).old.(?P<seqnum>\d+).gz'
+        self.nxos_old_log_name_seqnum = {}
+        self.nxos_old_log_list = []
+        self.nxos_old_log_md5_dict = {}
+        self.tar_cli = ""
+        self.cp_cli = ""
+        self.rm_cli = ""
+        self.remote_path_local_path = {
+            "/var/sysmgr/tmp_logs/":
+                {
+                    "local_path": "var/sysmgr/tmp_logs/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": True,
+                },
+            "/var/sysmgr/tmp_logs/nxos/":
+                {
+                    "local_path": "var/sysmgr/tmp_logs/nxos/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": True,
+                },
+            "/var/sysmgr/tmp_logs/old/":
+                {
+                    "local_path": "var/sysmgr/tmp_logs/old/",
+                    "incremental": True,
+                    "symbol": False,
+                    "override": False,
+                },
+            "/var/sysmgr/tmp_logs/dme_logs/":
+                {
+                    "local_path": "var/sysmgr/tmp_logs/dme_logs/",
+                    "incremental": False,
+                    "symbol": True,
+                    "override": True,
+                },
+            "/var/log/dme/oldlog/":
+                {
+                    "local_path": "var/log/dme/oldlog/",
+                    "incremental": True,
+                    "symbol": False,
+                    "override": False,
+                },
+            "/var/log/dme/oldlog/dme/":
+                {
+                    "local_path": "var/log/dme/oldlog/dme/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": False,
+                },
+            "/var/log/dme/oldlog/xlog/":
+                {
+                    "local_path": "var/log/dme/oldlog/xlog/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": True,
+                },
+            "/var/log/dme/oldlog/show_tech_info/":
+                {
+                    "local_path": "var/log/dme/oldlog/show_tech_info/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": True,
+                },
+            "/bin/nxos_binlog_decode":
+                {
+                    "local_path": "isan/bin/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": True,
+                },
+            "/bin/nxos_binlog_decode64":
+                {
+                    "local_path": "isan/bin/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": True,
+                },
+            "/bin/log_trace_bl_print_tool":
+                {
+                    "local_path": "isan/bin/",
+                    "incremental": False,
+                    "symbol": False,
+                    "override": True,
+                },
+        }
+        self.ssh_option = self.fabric_name+ '/.id_rsa -o UserKnownHostsFile=/dev/null -o GSSAPIAuthentication=no -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=60'
+        #self.rsync = '/usr/bin/sshpass -p \'%s\' /usr/bin/rsync ' % self.pass_word
+        self.rsync = '/usr/bin/rsync '
+        self.local_rsync = ' /usr/bin/rsync '
+        #self.show_tech = '/usr/bin/sshpass -p \'' + self.pass_word + '\' /usr/bin/ssh ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
+        self.show_tech = '/usr/bin/ssh -i ' + self.ssh_option + ' ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
+        self.pre_init()
+
+    def pre_init(self):
+        node_id = self.node_id
+        if not os.path.exists('/usr/bin/rsync'):
+            logger.warning("/usr/bin/rsync can't find, install it and run again")
+            sys.exit()
+
+        if os.path.exists('/usr/bin/cp'):
+            self.cp_cli = '/usr/bin/cp'
+        elif os.path.exists('/bin/cp'):
+            self.cp_cli = '/bin/cp'
+        else:
+            logger.warning("cp can't find, install it and run again")
+            sys.exit()
+
+        '''
+        if not os.path.exists('/usr/bin/sshpass'):
+            logger.warning("/usr/bin/sshpass can't find, install it and run again")
+            sys.exit()
+        '''
+
+        if os.path.exists('/usr/bin/tar'):
+            self.tar_cli = '/usr/bin/tar'
+        elif os.path.exists('/bin/tar'):
+            self.tar_cli = '/bin/tar'
+        else:
+            logger.warning("tar can't find, install it and run again")
+            sys.exit()
+
+        if not os.path.exists('/usr/bin/ssh'):
+            logger.warning("/usr/bin/ssh can't find, install it and run again")
+            sys.exit()
+
+        if os.path.exists('/usr/bin/tar'):
+            self.tar_cli = '/usr/bin/tar'
+        elif os.path.exists('/bin/tar'):
+            self.tar_cli = '/bin/tar'
+        else:
+            logger.warning("tar can't find, install it and run again")
+            sys.exit(0)
+
+        if os.path.exists('/usr/bin/rm'):
+            self.rm_cli = '/usr/bin/rm'
+        elif os.path.exists('/bin/rm'):
+            self.rm_cli = '/bin/rm'
+        else:
+            logger.warning("rm can't find, install it and run again")
+            sys.exit(0)
+
+        if not os.path.exists(self.fabric_name):
+            os.makedirs(self.fabric_name + '/' + node_id + '/' + self.version + '/active/', exist_ok=True)
+
+        if not os.path.exists(self.fabric_name + '/' + node_id):
+            os.makedirs(self.fabric_name + '/' + node_id + '/' + self.version + '/active/', exist_ok=True)
+
+        if not os.path.exists(self.fabric_name + '/' + node_id + '/' + self.version + '/active/'):
+            os.makedirs(self.fabric_name + '/' + node_id + '/' + self.version + '/active/', exist_ok=True)
+
+        self.active_dir = './' + self.fabric_name + '/' + node_id + '/' + self.version + '/active/'
+        self.archive_dir = './' + self.fabric_name + '/' + node_id + '/' + self.version + '/archive/'
+
+    def snapShotCopy(self, remote_path):
+        logger.info("Fabric: %s, Node: %s, Current Version: %s, Syncing remote directory: %s ", fabric_domain,
+                    self.node_id,
+                    self.version, remote_path)
+        if remote_path in self.remote_path_local_path:
+            local_active_path = self.active_dir + self.remote_path_local_path.get(remote_path).get("local_path")
+            symbol = self.remote_path_local_path.get(remote_path).get("symbol")
+
+            if not os.path.exists(local_active_path):
+                os.makedirs(local_active_path, exist_ok=True)
+
+            snapshot_cmd = self.rsync + ' -qrt'
+
+            if symbol:
+                snapshot_cmd = snapshot_cmd + ' --safe-links '
+
+            if self.remote_path_local_path.get(remote_path).get("override"):
+                snapshot_cmd = snapshot_cmd + ' --delete-during '
+
+            snapshot_cmd = snapshot_cmd + ' -e \" ssh -i ' + self.ssh_option + ' \"  ' \
+                           + self.user_name + '@' + self.targetIp + ':' + remote_path + ' ' + local_active_path
+
+            logger.debug(snapshot_cmd)
+            get_cmd(snapshot_cmd)
+
+            # Archive the snapshot without overwrite existing file.
+
+            sync_dirs = [remote_path]
+            for (root, dirs, files) in os.walk(local_active_path, topdown=True):
+                for each_dir in dirs:
+                    temp_dir = root + each_dir
+                    relative_path = temp_dir.replace(self.active_dir, '/') + '/'
+                    if relative_path in self.remote_path_local_path:
+                        sync_dirs.append(relative_path)
+
+            for dir in sync_dirs:
+                logger.debug("working on dir %s " % dir)
+                if self.remote_path_local_path.get(dir).get("incremental"):
+                    self.increamentalCopy(dir)
+                    continue
+                if self.remote_path_local_path.get(dir).get("override"):
+                    archiveLogCmd = self.local_rsync + ' -qrt --delete-during '
+                else:
+                    archiveLogCmd = self.local_rsync + ' -qt '
+
+                local_active_path = self.active_dir + self.remote_path_local_path.get(dir).get("local_path")
+                local_archive_path = self.archive_dir + self.remote_path_local_path.get(dir).get("local_path")
+
+                if not os.path.exists(local_archive_path):
+                    os.makedirs(local_archive_path, exist_ok=True)
+                archiveLogCmd = archiveLogCmd + local_active_path + "* " + local_archive_path
+
+                logger.debug("Sync-up between active and archive %s", archiveLogCmd)
+                output = get_cmd(archiveLogCmd)
+                logger.debug("The output cmd is %s", output)
+            logger.info("Fabric: %s, Node: %s, Current Version: %s, %s is synced between active and archive ",
+                        fabric_domain,
+                        self.node_id, self.version, remote_path)
+        else:
+            logger.warning("The remote path %s has unknown policy, ignore it", remote_path)
+
+    def get_md5(self, file_name):
+        md5cmd = '/usr/bin/md5sum ' + file_name
+        output = get_cmd(md5cmd)
+        for line in output:
+            md5_result = line.decode().split(' ')[0]
+            return md5_result
+
+    def trigger_nxos_tech(self):
+        vsh_cmd = self.show_tech
+        logger.debug(vsh_cmd)
+        get_cmd(vsh_cmd)
+
+    def update_nxos_oldlog_list(self, local_merge_path):
+        logger.debug(local_merge_path)
+        if os.path.exists(local_merge_path):
+            for (root, dirs, files) in os.walk(local_merge_path, topdown=True):
+                for individual_file in files:
+                    md5_result = self.get_md5(local_merge_path + individual_file)
+                    if md5_result not in self.nxos_old_log_md5_dict:
+                        self.nxos_old_log_md5_dict[md5_result] = local_merge_path + individual_file
+                    if individual_file not in self.nxos_old_log_list:
+                        self.nxos_old_log_list.append(individual_file)
+        self.nxos_old_log_list.sort()
+
+        for file in self.nxos_old_log_list:
+            reg_seq_num = re.search(self.old_file_seq_reg, file)
+            if reg_seq_num:
+                file_name = reg_seq_num.group('logname')
+                seq_num = int(reg_seq_num.group('seqnum'))
+                if file_name not in self.nxos_old_log_name_seqnum:
+                    self.nxos_old_log_name_seqnum[file_name] = seq_num
+                else:
+                    if int(seq_num) > int(self.nxos_old_log_name_seqnum[file_name]):
+                        self.nxos_old_log_name_seqnum[file_name] = seq_num
+        logger.debug(self.nxos_old_log_name_seqnum)
+
+    def increamentalCopy(self, remote_path):
+        fileRolledOverList = []
+        local_active_path = self.active_dir + self.remote_path_local_path.get(remote_path).get("local_path")
+        local_archive_path = self.archive_dir + self.remote_path_local_path.get(remote_path).get("local_path")
+        first_run = False
+
+        if not os.path.exists(local_archive_path):
+            os.makedirs(local_archive_path, exist_ok=True)
+            first_run = True
+        else:
+            self.update_nxos_oldlog_list(local_archive_path)
+
+        if first_run:
+            if self.remote_path_local_path.get(remote_path).get("override"):
+                archiveLogCmd = self.cp_cli + ' -fp '
+            else:
+                archiveLogCmd = self.cp_cli + ' -np '
+
+            archiveLogCmd = archiveLogCmd + local_active_path + "* " + local_archive_path
+
+            logger.debug(archiveLogCmd)
+            get_cmd(archiveLogCmd)
+        else:
+            nxos_new_log_md5_dict = {}
+            if os.path.exists(local_active_path):
+                for (root, dirs, files) in os.walk(local_active_path, topdown=True):
+                    for individual_file in files:
+                        md5_result = self.get_md5(local_active_path + individual_file)
+                        if md5_result not in nxos_new_log_md5_dict:
+                            nxos_new_log_md5_dict[md5_result] = local_active_path + individual_file
+
+            for line in nxos_new_log_md5_dict:
+                full_file_name = nxos_new_log_md5_dict[line]
+                file_name = full_file_name.split("/")[-1]
+                if line in self.nxos_old_log_md5_dict:
+                    #logger.debug(nxos_new_log_md5_dict.get(line) + " is skipped due to  same md5sum with " + self.nxos_old_log_md5_dict.get(line))
+                    continue
+                if 'binlog' not in full_file_name and '.bl.old' not in full_file_name:
+                    archiveLogCmd = self.cp_cli + ' -fp '
+
+                    archiveLogCmd = archiveLogCmd + full_file_name + " " + local_archive_path
+
+                    logger.debug(archiveLogCmd)
+                    get_cmd(archiveLogCmd)
+
+                elif file_name in self.nxos_old_log_list:
+                    # The file was before but now is changed, so it was rotated/rolled over.
+                    fileRolledOverList.append(file_name)
+                    logger.debug(file_name + " is added to rolled-over list")
+                    # rename the file by padding 1 on top of the most max number
+                    file_search = re.search(self.old_file_seq_reg, file_name)
+                    if file_search:
+                        file_name = file_search.group('logname')
+                        next_max_seq = self.nxos_old_log_name_seqnum.get(file_name) + 1
+                        new_file_name = file_name + ".old." + str(next_max_seq) + ".gz"
+                        archiveLogCmd = self.cp_cli + ' -p ' + full_file_name + " " + local_archive_path + new_file_name
+                        logger.debug(archiveLogCmd)
+                        get_cmd(archiveLogCmd)
+                        logger.info(full_file_name + ' is preserved with new name ' + new_file_name)
+                        self.nxos_old_log_name_seqnum[file_name] = next_max_seq
+                else:
+                    archiveLogCmd = self.cp_cli + ' -p ' + full_file_name + " " + local_archive_path
+                    logger.debug(archiveLogCmd)
+                    get_cmd(archiveLogCmd)
+
+    def gen_tech_support(self):
+        logger.info("Fabric: %s, Current Version: %s, Generating Tech-support for Node: %s,", fabric_domain,
+                    self.node_id,
+                    self.version, )
+        self.trigger_nxos_tech()
+        self.snapShotCopy('/var/sysmgr/tmp_logs/')
+        self.snapShotCopy('/var/log/dme/oldlog/')
+        self.snapShotCopy('/bin/nxos_binlog_decode')
+        self.snapShotCopy('/bin/nxos_binlog_decode64')
+        self.snapShotCopy('/bin/log_trace_bl_print_tool')
+        '''
+        ./isan/bin/sdk_log_decode_ts.tar.gz # this file is only accessible by root
+        '''
+
+        target_path = fabric_domain + '/' + self.node_id + '/' + self.version + '/archive/'
+        date_time = datetime.now().strftime("%Y-%m-%dT%H-%M%Z")
+        svc_ifc_techsup_nxos = 'svc_ifc_techsup_nxos.tar'
+        output_file_name = self.fabric_name + '_' + 'node' + self.node_id + '_sysid-' + self.node_id + '_' + date_time + '_logs_3of3.tgz'
+
+        if os.path.exists(target_path):
+            nxos_gen_cmd = self.tar_cli + ' -cf  ' + target_path + 'var/sysmgr/tmp_logs/' + svc_ifc_techsup_nxos
+            nxos_gen_cmd = nxos_gen_cmd + ' -C ' + target_path + '/var/log/dme/oldlog/ ' + 'show_tech_info'
+            logger.debug(nxos_gen_cmd)
+            get_cmd(nxos_gen_cmd)
+
+            target_dir = fabric_domain + '_' + 'node' + self.node_id + '_sysid-' + self.node_id + '_' + date_time + '_logs_3of3'
+            if not os.path.exists(target_dir):
+                os.makedirs(target_dir, exist_ok=True)
+
+            cp_file_cmd = self.cp_cli + ' -pr ' + target_path + '* ' + target_dir
+            logger.debug(cp_file_cmd)
+            get_cmd(cp_file_cmd)
+
+            rm_show_tech = self.rm_cli + ' -rf ' + target_dir + '/var/log/dme/oldlog/show_tech_info'
+            logger.debug(rm_show_tech)
+            get_cmd(rm_show_tech)
+
+            log_gen_cmd = self.tar_cli + ' -czf  ' + output_file_name + ' ' + target_dir
+            logger.debug(log_gen_cmd)
+            get_cmd(log_gen_cmd)
+
+            rm_temp_tech_dir = self.rm_cli + ' -rf ' + target_dir
+            logger.debug(rm_temp_tech_dir)
+            get_cmd(rm_temp_tech_dir)
+
+            logger.info("Show Tech File %s is generated " % output_file_name)
+        else:
+            logger.warning("%s does not exist" % target_path)
+
+
+def pull_directory(node_id, target_ip, version, user_name, remote_path, tech=False):
+    try:
+        work_list = []
+        fileSyncer = LogFileSyncer(node_id, target_ip, user_name,  version)
+        if tech:
+            flag_file = fabric_domain + "_" + version + "_" + node_id
+            if os.path.exists(flag_file):
+                work_list.append((fileSyncer.gen_tech_support, ()), )
+                os.remove(flag_file)
+        else:
+            work_list.append((fileSyncer.snapShotCopy, (remote_path,)), )
+        if len(work_list) >= 1:
+            batch_work(work_list)
+    except KeyboardInterrupt as e:
+        sys.exit("\Ctrl-c Pressed,Bye\n")
+
+
+def clean_directory(node_id, version, older_than=LOG_OLD_THAN):
+    try:
+        clean_up_cmd = '/usr/bin/find ' + fabric_domain + '/' + node_id + '/' + version + '/' + 'archive/ ' + ' -mtime +' + str(older_than)
+        clean_up_cmd = clean_up_cmd + '| /usr/bin/xargs rm -rf '
+        logger.debug(clean_up_cmd)
+        get_cmd(clean_up_cmd)
+        logger.info("Fabric: %s, Node: %s, Current Version: %s, Archived files older than %s is cleaned up ", fabric_domain,
+                    node_id, version, older_than)
+    except KeyboardInterrupt as e:
+        sys.exit("\Ctrl-c Pressed,Bye\n")
+
+
+def batch_work(work):
+    threads = []
+
+    for (target, args) in work:
+        t = threading.Thread(target=target, args=args)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+    return
+
+
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Pull critical logs from ACI device', usage=" ")
+    parser.add_argument("-u", dest="user", help="user name ", default=None)
+    parser.add_argument('-i', dest="host", help='APIC hostname', default=None)
+    parser.add_argument("-d", dest="debug", choices=["debug", "info", "warn"], default="info")
+    parser.add_argument("-t", dest="tech", action="store_true", help="collect tech-support", default=False)
+    parser.add_argument("-n", dest="node", help="node id ", default=None)
+    parser.add_argument("-f", dest="fabric",help="fabric name ", default=None)
+    parser.add_argument("-s", dest="setup",action="store_true", help="setup the script ", default=False)
+
+    args = parser.parse_args()
+
+    apic_ip = args.host
+
+    if args.setup and args.host:
+        if args.user is not None:
+            user_name = args.user
+        user_name = input("Username: ").strip()
+        user_pass = getpass.getpass("PassWord:")
+        fabric_node = APIC(apic_ip, user_name, user_pass)
+        if fabric_node is not None:
+            fabric_node.get_name_list_with_ip()
+            fnode_dict = fabric_node.nodeDict
+            fabric_domain = fnode_dict.get('fabricDomain')
+            fabric_node.save_fnode_json()
+            if not os.path.exists(fabric_domain):
+                os.makedirs(fabric_domain,exist_ok=True)
+            logfile = fabric_domain + '/script.log'
+            setup_logger(logger, args.debug,logfile)
+            ssh_rsa = fabric_domain + "/.id_rsa"
+            if os.path.exists(ssh_rsa):
+                logger.warning("Found private key file %s ",ssh_rsa)
+            else:
+                ssh_key_cmd = ' /usr/bin/ssh-keygen -t rsa -q -f ' + ssh_rsa + ' -N "" '
+                logger.debug(ssh_key_cmd)
+                get_cmd(ssh_key_cmd)
+            ssh_pub = ssh_rsa + '.pub'
+            if os.path.exists(ssh_pub):
+                logger.info("Add the ssh-pub key below to user %s on %s",user_name,apic_ip)
+                with open(ssh_pub,'r') as f:
+                    print(f.read())
+
+            logger.info("\nUsage: nohup python3 logsavor -f %s -u %s &",fabric_domain,user_name)
+            sys.exit()
+
+
+    if args.node is not None:
+        node_id = args.node
+    else:
+        node_id = ''
+
+    collect_tech = args.tech
+    fnode_dict = {}
+    if args.fabric is not None:
+        fabric_domain = args.fabric
+        fnode_json_file = fabric_domain + '/fabric_node.json'
+        if os.path.exists(fabric_domain):
+            logfile = fabric_domain + '/script.log'
+            setup_logger(logger, args.debug, logfile)
+            if os.path.exists(fnode_json_file):
+                fnode_dict = load_json_fnode(fnode_json_file)
+            else:
+                logger.warning("fabric configuration %s not found", fnode_json_file)
+                sys.exit(0)
+        else:
+            print("Please setup the script first\n python3 logsavor -s -i apic_ip")
+            sys.exit(0)
+
+    else:
+        print("usage: python3 logsavor -f fabric_domain_name -u user_name")
+        sys.exit(0)
+
+    fabric_domain = fnode_dict.get('fabricDomain')
+    if node_id != '' and collect_tech:
+        target_ip = fnode_dict[node_id].get('oobMgmtAddr')
+        version = fnode_dict[node_id].get('version')
+        flag_file = fabric_domain + "_" + version + "_" + node_id
+        with open(flag_file, 'w') as file:
+            logger.info("Tech-support for node %s should start within 30 seconds",node_id)
+            sys.exit(0)
+
+    if args.user is not None:
+        user_name = args.user
+    else:
+        user_name = input("Username whose ssh pub-key is deployed to APIC: ").strip()
+    try:
+        for node_id in fnode_dict:
+            if node_id == 'fabricDomain':
+                continue
+            if fnode_dict[node_id].get('role') != 'controller':
+                version = fnode_dict[node_id].get('version')
+                target_ip = fnode_dict[node_id].get('oobMgmtAddr')
+                '''
+                /var/sysmgr/tmp_logs/                  - normal copy                       - 2 minutes
+                /var/sysmgr/tmp_logs/nxos/            - normal copy                        - 2 minutes
+                /var/sysmgr/tmp_logs/old/              - incremental copy for all files.   - 2 minutes
+                /var/sysmgr/tmp_logs/dme_logs/         - symbol link copy --safe-links     - 2 minutes
+                '''
+                # sync-up /var/sysmgr/tmp_logs/*  every two minutes.
+
+                timer1 = TimerCb(120, pull_directory,
+                                 args=(node_id, target_ip, version, user_name,  '/var/sysmgr/tmp_logs/',))
+                timer1.start()
+                logger.debug("Timer for sync-up /var/sysmgr/tmp_logs/ Started for Node %s" % node_id)
+
+                '''
+                /var/log/dme/oldlog/*                   - incremental copy for *.old.*.gz   - 5 minutes
+                /var/log/dme/oldlog/dme/*               - dme logs                          - 5 minutes
+                /var/log/dme/oldlog/show_tech_info/*    - show techsupport                  - 5 minutes
+                '''
+                # sync-up /var/log/dme/oldlog/* every 5 minutes incremental copy for *.old.*.gz
+                timer2 = TimerCb(300, pull_directory,
+                                 args=(node_id, target_ip, version, user_name,  '/var/log/dme/oldlog/',))
+                timer2.start()
+                logger.debug("Timer for sync-up /var/log/dme/oldlog/ Started for Node %s" % node_id)
+
+                timer3 = TimerCb(30, pull_directory,
+                                 args=(node_id, target_ip, version, user_name, '', True,))
+                timer3.start()
+                logger.debug("Timer for scan tech-support flag files Started for node %s" % node_id)
+
+                timer4 = TimerCb(3600, clean_directory,
+                                 args=(node_id, version,))
+                timer4.start()
+                logger.debug("Timer for clean-up 15+ days older log files Started for node %s" % node_id)
+
+                logger.info("Regular log saving timer started for node %s" % node_id)
+    except KeyboardInterrupt as e:
+        sys.exit("\Ctrl-c Pressed,Bye\n")
+
