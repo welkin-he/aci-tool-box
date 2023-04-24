@@ -30,7 +30,7 @@ admin@ubuntu:~/demo$ nohup python3 logsavor -f FabricA -u admin &
 admin@ubuntu:~/demo$ nohup: ignoring input and appending output to 'nohup.out'
 
 
-admin@ubuntu:~/demo$ python3 logsavor -f  FabricA -n 101
+admin@ubuntu:~/demo$ python3 logsavor -f  FabricA -n 101 -t
 PDT 2023-04-17T01:26:34.775||INFO||(185)||loading json file: CAP1/fabric_node.json
 PDT 2023-04-17T01:26:34.790||INFO||(193)||18 records loaded from CAP1/fabric_node.json
 PDT 2023-04-17T01:26:34.790||INFO||(697)||Tech-support for node 101 should start within 30 seconds
