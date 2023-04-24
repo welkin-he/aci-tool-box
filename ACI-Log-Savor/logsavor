@@ -736,7 +736,7 @@ if __name__ == '__main__':
                 timer4 = TimerCb(3600, clean_directory,
                                  args=(node_id, version,))
                 timer4.start()
-                logger.debug("Timer for clean-up 20+ days older log files Started for node %s" % node_id)
+                logger.debug("Timer for clean-up 15+ days older log files Started for node %s" % node_id)
 
                 logger.info("Regular log saving timer started for node %s" % node_id)
     except KeyboardInterrupt as e:
