@@ -29,6 +29,20 @@ admin@ubuntu:~/demo$ nohup python3 logsavor -f FabricA -u admin &
 [1] 42670
 admin@ubuntu:~/demo$ nohup: ignoring input and appending output to 'nohup.out'
 
+admin@ubuntu:~/demo$ nohup  python3 logsavor -f CAP1 -u admin -n 101,102 &
+
+admin@ubuntu:~/demo$ cat nohup.out
+
+PST 2024-01-17T18:19:24.728||INFO||(186)||loading json file: CAP1/fabric_node.json
+PST 2024-01-17T18:19:24.728||INFO||(194)||21 records loaded from CAP1/fabric_node.json
+PST 2024-01-17T18:19:24.729||INFO||(740)||Regular log saving timer started for node 101
+PST 2024-01-17T18:19:24.730||INFO||(740)||Regular log saving timer started for node 102
+PST 2024-01-17T18:21:24.729||INFO||(363)||Fabric: CAP1, Node: 101, Current Version: 15.2-5c, Syncing remote directory: /var/sysmgr/tmp_logs/
+PST 2024-01-17T18:21:24.732||INFO||(363)||Fabric: CAP1, Node: 102, Current Version: 15.2-5c, Syncing remote directory: /var/sysmgr/tmp_logs/
+PST 2024-01-17T18:22:55.231||INFO||(417)||Fabric: CAP1, Node: 102, Current Version: 15.2-5c, /var/sysmgr/tmp_logs/ is synced between active and archive
+PST 2024-01-17T18:23:00.129||INFO||(417)||Fabric: CAP1, Node: 101, Current Version: 15.2-5c, /var/sysmgr/tmp_logs/ is synced between active and archive
+
+
 
 admin@ubuntu:~/demo$ python3 logsavor -f  FabricA -n 101 -t
 PDT 2023-04-17T01:26:34.775||INFO||(185)||loading json file: CAP1/fabric_node.json

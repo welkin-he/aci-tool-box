@@ -618,7 +618,7 @@ if __name__ == '__main__':
     parser.add_argument('-i', dest="host", help='APIC hostname', default=None)
     parser.add_argument("-d", dest="debug", choices=["debug", "info", "warn"], default="info")
     parser.add_argument("-t", dest="tech", action="store_true", help="collect tech-support", default=False)
-    parser.add_argument("-n", dest="node", help="node id ", default=None)
+    parser.add_argument('-n', dest="node", type=lambda s: re.split(' |,', s),required=False,help='comma/space delimited list of nodes')
     parser.add_argument("-f", dest="fabric",help="fabric name ", default=None)
     parser.add_argument("-s", dest="setup",action="store_true", help="setup the script ", default=False)
 
@@ -658,10 +658,6 @@ if __name__ == '__main__':
             sys.exit()
 
 
-    if args.node is not None:
-        node_id = args.node
-    else:
-        node_id = ''
 
     collect_tech = args.tech
     fnode_dict = {}
@@ -679,19 +675,20 @@ if __name__ == '__main__':
         else:
             print("Please setup the script first\n python3 logsavor -s -i apic_ip")
             sys.exit(0)
-
     else:
         print("usage: python3 logsavor -f fabric_domain_name -u user_name")
         sys.exit(0)
 
-    fabric_domain = fnode_dict.get('fabricDomain')
-    if node_id != '' and collect_tech:
-        target_ip = fnode_dict[node_id].get('oobMgmtAddr')
-        version = fnode_dict[node_id].get('version')
-        flag_file = fabric_domain + "_" + version + "_" + node_id
-        with open(flag_file, 'w') as file:
-            logger.info("Tech-support for node %s should start within 30 seconds",node_id)
-            sys.exit(0)
+    if args.node is not None and len(args.node)>=1 and collect_tech:
+        fabric_domain = fnode_dict.get('fabricDomain')
+        for node_id in args.node:
+            if node_id in fnode_dict:
+                target_ip = fnode_dict[node_id].get('oobMgmtAddr')
+                version = fnode_dict[node_id].get('version')
+                flag_file = fabric_domain + "_" + version + "_" + node_id
+                with open(flag_file, 'w') as file:
+                    logger.info("Tech-support for node %s should start within 30 seconds",node_id)
+                    sys.exit(0)
 
     if args.user is not None:
         user_name = args.user
@@ -700,6 +697,8 @@ if __name__ == '__main__':
     try:
         for node_id in fnode_dict:
             if node_id == 'fabricDomain':
+                continue
+            if (args.node is not None) and (len(args.node)>=1) and (node_id not in args.node):
                 continue
             if fnode_dict[node_id].get('role') != 'controller':
                 version = fnode_dict[node_id].get('version')
@@ -741,4 +740,3 @@ if __name__ == '__main__':
                 logger.info("Regular log saving timer started for node %s" % node_id)
     except KeyboardInterrupt as e:
         sys.exit("\Ctrl-c Pressed,Bye\n")
-
