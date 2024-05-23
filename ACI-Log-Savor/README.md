@@ -24,7 +24,10 @@ PDT 2023-04-10T23:18:53.007||INFO||(637)||Add the ssh-pub key below to user admi
 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCijsbJafM96WwvC9Sn/K0R2jAndTkkYAupH1OCtE5CQtcNi9V9Dt7FpfVk5+f1i7PgAAOve9MxBbgFBLq6Ed+pHQ2qTpzn8eRoTWffxUkrUGJXQcdOywqWOMkxRcmTrRhFttEQJTqn4SRm5ITlmhkgjeDBuCgQ4Cj5RZI5lUXicjbFO2v6ykiGzbcueNlU+hbcBxsb0LctzpiFvUHNeTbgKOfDulJZBrwRRPf8DrocBh1te0B2h1xU8amvku6qyB1UoMGuwssQrKCIap28KNVkJhZCFQJlciJQt0/Q5pPghrcC5NJdKv5aDGp2QXRq8Bz44qzrlAdPnt+oX9vUrHrH tianhe@aci-logviewer
 
 PDT 2023-04-10T23:18:53.008||INFO||(641)||
-Usage: nohup python3 logsavor -f FabricA -u admin &
+Usage with OOB: nohup python3 logsavor -f FabricA -u admin &
+Usage with INB: nohup python3 logsavor -f FabricA -u admin -c inb &
+
+
 admin@ubuntu:~/demo$ nohup python3 logsavor -f FabricA -u admin &
 [1] 42670
 admin@ubuntu:~/demo$ nohup: ignoring input and appending output to 'nohup.out'
