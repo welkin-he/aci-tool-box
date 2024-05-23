@@ -152,10 +152,10 @@ class APIC:
                 attr = MoEntry.get("topSystem").get("attributes")
                 node_id = attr.get('id')
                 oob_addr = attr.get('oobMgmtAddr')
-                if oob_addr == '0.0.0.0':
-                    logger.warning("Skip: Node %s OOB mgmt address is not configured", node_id)
-                    continue
                 inb_addr = attr.get('inbMgmtAddr')
+                if oob_addr == '0.0.0.0' and inb_addr=='0.0.0.0':
+                    logger.warning("Skip: Node %s mgmt address is not configured", node_id)
+                    continue
                 fabric_domain = attr.get('fabricDomain')
                 self.fabric_domain = fabric_domain
                 role = attr.get('role')
@@ -621,6 +621,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', dest="node", type=lambda s: re.split(' |,', s),required=False,help='comma/space delimited list of nodes')
     parser.add_argument("-f", dest="fabric",help="fabric name ", default=None)
     parser.add_argument("-s", dest="setup",action="store_true", help="setup the script ", default=False)
+    parser.add_argument("-c", dest="connect",choices=["oob", "inb", ], default="oob")
 
     args = parser.parse_args()
 
@@ -684,6 +685,8 @@ if __name__ == '__main__':
         for node_id in args.node:
             if node_id in fnode_dict:
                 target_ip = fnode_dict[node_id].get('oobMgmtAddr')
+                if args.connect=="inb":
+                    target_ip = fnode_dict[node_id].get('inbMgmtAddr')
                 version = fnode_dict[node_id].get('version')
                 flag_file = fabric_domain + "_" + version + "_" + node_id
                 with open(flag_file, 'w') as file:
@@ -703,6 +706,12 @@ if __name__ == '__main__':
             if fnode_dict[node_id].get('role') != 'controller':
                 version = fnode_dict[node_id].get('version')
                 target_ip = fnode_dict[node_id].get('oobMgmtAddr')
+                if args.connect=="inb":
+                    target_ip = fnode_dict[node_id].get('inbMgmtAddr')
+                
+                if target_ip == '0.0.0.0':
+                    logger.warning("node %s is bypassed due to target IP %s",node_id,target_ip)
+                    continue                
                 '''
                 /var/sysmgr/tmp_logs/                  - normal copy                       - 2 minutes
                 /var/sysmgr/tmp_logs/nxos/            - normal copy                        - 2 minutes
