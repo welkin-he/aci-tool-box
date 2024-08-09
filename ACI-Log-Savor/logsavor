@@ -12,7 +12,9 @@ import shlex
 import os
 import json
 import getpass
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
+
 
 urllib3.disable_warnings()
 
@@ -582,20 +584,33 @@ def pull_directory(node_id, target_ip, version, user_name, remote_path, tech=Fal
             work_list.append((fileSyncer.snapShotCopy, (remote_path,)), )
         if len(work_list) >= 1:
             batch_work(work_list)
-    except KeyboardInterrupt as e:
-        sys.exit("\Ctrl-c Pressed,Bye\n")
+    except Exception as e:
+        logger.warning("Fabric: %s, Node: %s, Version: %s, pull_directory exception occurred %s", fabric_domain, node_id, version, e)
+    finally:
+        logger.debug("pull_directory Execution completed. continue")
 
 
-def clean_directory(node_id, version, older_than=LOG_OLD_THAN):
+def clean_directory(node_id,version,older_than):
     try:
-        clean_up_cmd = '/usr/bin/find ' + fabric_domain + '/' + node_id + '/' + version + '/' + 'archive/ ' + ' -mtime +' + str(older_than)
-        clean_up_cmd = clean_up_cmd + '| /usr/bin/xargs rm -rf '
-        logger.debug(clean_up_cmd)
-        get_cmd(clean_up_cmd)
-        logger.info("Fabric: %s, Node: %s, Current Version: %s, Archived files older than %s is cleaned up ", fabric_domain,
-                    node_id, version, older_than)
-    except KeyboardInterrupt as e:
-        sys.exit("\Ctrl-c Pressed,Bye\n")
+        now = time.time()
+        days_ago = now - timedelta(days=older_than).total_seconds()
+        directory=fabric_domain + '/' + node_id + '/' + version + '/' + 'archive/'
+        logger.info("cleanning Fabric %s, Node: %s , Directory %s", fabric_domain, node_id, directory)
+       
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if os.path.islink(file_path):
+                    continue
+                creation_time = os.path.getmtime(file_path)
+                if creation_time <= days_ago:
+                    logger.info("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
+                        node_id, version, file_path, str(time.ctime(creation_time)))
+                    os.remove(file_path)
+    except Exception as e:
+        logger.warning("Fabric: %s, Node: %s, Version: %s, clean_directory exception occurred %s", fabric_domain, node_id, version, e)
+    finally:
+        logger.deubg("clean_directory Execution completed. continue")
 
 
 def batch_work(work):
@@ -659,7 +674,6 @@ if __name__ == '__main__':
             sys.exit()
 
 
-
     collect_tech = args.tech
     fnode_dict = {}
     if args.fabric is not None:
@@ -711,7 +725,10 @@ if __name__ == '__main__':
                 
                 if target_ip == '0.0.0.0':
                     logger.warning("node %s is bypassed due to target IP %s",node_id,target_ip)
-                    continue                
+                    continue    
+
+
+                 
                 '''
                 /var/sysmgr/tmp_logs/                  - normal copy                       - 15 minutes
                 /var/sysmgr/tmp_logs/nxos/            - normal copy                        - 15 minutes
@@ -742,10 +759,11 @@ if __name__ == '__main__':
                 logger.debug("Timer for scan tech-support flag files Started for node %s" % node_id)
 
                 timer4 = TimerCb(3600, clean_directory,
-                                 args=(node_id, version,))
+                                 args=(node_id, version, LOG_OLD_THAN))
                 timer4.start()
                 logger.debug("Timer for clean-up 15+ days older log files Started for node %s" % node_id)
 
                 logger.info("Regular log saving timer started for node %s" % node_id)
+                
     except KeyboardInterrupt as e:
         sys.exit("\Ctrl-c Pressed,Bye\n")
