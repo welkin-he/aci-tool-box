@@ -210,12 +210,14 @@ def clean_directory(node_id,version,older_than=LOG_OLD_THAN):
                     continue
                 creation_time = os.path.getmtime(file_path)
                 if creation_time <= days_ago:
-                    logger.info("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
+                    logger.debug("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
                         node_id, version, file_path, str(time.ctime(creation_time)))
                     os.remove(file_path)
         
 
         directory=fabric_domain + '/' + node_id + '/' + version + '/' + 'archive/'
+        if (not os.path.exists(directory)):
+            return
         logger.info("cleanning Fabric %s, Node: %s , Directory %s", fabric_domain, node_id, directory)
        
         for root, dirs, files in os.walk(directory):
@@ -225,13 +227,13 @@ def clean_directory(node_id,version,older_than=LOG_OLD_THAN):
                     continue
                 creation_time = os.path.getmtime(file_path)
                 if creation_time <= days_ago:
-                    logger.info("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
+                    logger.debug("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
                         node_id, version, file_path, str(time.ctime(creation_time)))
                     os.remove(file_path)
     except Exception as e:
         logger.warning("Fabric: %s, Node: %s, Version: %s, clean_directory exception occurred %s", fabric_domain, node_id, version, e)
     finally:
-        logger.deubg("clean_directory Execution completed. continue")
+        logger.debug("clean_directory Execution completed. continue")
 
 
 class LogFileSyncer:
@@ -745,26 +747,26 @@ if __name__ == '__main__':
                     logger.warning("node %s is bypassed due to target IP %s",node_id,target_ip)
                     continue    
 
-                 
                 '''
                 /var/sysmgr/tmp_logs/                  - normal copy                       - 15 minutes
-                /var/sysmgr/tmp_logs/nxos/            - normal copy                        - 15 minutes
+                /var/sysmgr/tmp_logs/nxos/             - normal copy                        - 15 minutes
                 /var/sysmgr/tmp_logs/old/              - incremental copy for all files.   - 15 minutes
                 /var/sysmgr/tmp_logs/dme_logs/         - symbol link copy --safe-links     - 15 minutes
                 '''
                 # sync-up /var/sysmgr/tmp_logs/*  every two minutes.
-
+                
                 timer1 = TimerCb(900, pull_directory,
                                  args=(node_id, target_ip, version, user_name,  '/var/sysmgr/tmp_logs/',))
                 timer1.start()
                 logger.debug("Timer for sync-up /var/sysmgr/tmp_logs/ Started for Node %s" % node_id)
-
+                
                 '''
                 /var/log/dme/oldlog/*                   - incremental copy for *.old.*.gz   - 30 minutes
                 /var/log/dme/oldlog/dme/*               - dme logs                          - 30 minutes
                 /var/log/dme/oldlog/show_tech_info/*    - show techsupport                  - 30 minutes
                 '''
                 # sync-up /var/log/dme/oldlog/* every 30 minutes incremental copy for *.old.*.gz
+                
                 timer2 = TimerCb(1800, pull_directory,
                                  args=(node_id, target_ip, version, user_name,  '/var/log/dme/oldlog/',))
                 timer2.start()
@@ -774,7 +776,7 @@ if __name__ == '__main__':
                                  args=(node_id, target_ip, version, user_name, '', True,))
                 timer3.start()
                 logger.debug("Timer for scan tech-support flag files Started for node %s" % node_id)
-
+                
                 logger.info("Regular log saving timer started for node %s" % node_id)
                 
     except KeyboardInterrupt as e:
