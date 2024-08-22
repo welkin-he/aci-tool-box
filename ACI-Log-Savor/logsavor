@@ -196,6 +196,44 @@ def load_json_fnode(fnode_json_file):
     logger.info("%s records loaded from %s", len(results), fnode_json_file)
     return results
 
+def clean_directory(node_id,version,older_than=LOG_OLD_THAN):
+    try:
+        now = time.time()
+        days_ago = now - timedelta(days=older_than).total_seconds()
+        directory=fabric_domain + '/' + node_id + '/' + version + '/' + 'active/'
+        logger.info("cleanning Fabric %s, Node: %s , Directory %s", fabric_domain, node_id, directory)
+       
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if os.path.islink(file_path):
+                    continue
+                creation_time = os.path.getmtime(file_path)
+                if creation_time <= days_ago:
+                    logger.info("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
+                        node_id, version, file_path, str(time.ctime(creation_time)))
+                    os.remove(file_path)
+        
+
+        directory=fabric_domain + '/' + node_id + '/' + version + '/' + 'archive/'
+        logger.info("cleanning Fabric %s, Node: %s , Directory %s", fabric_domain, node_id, directory)
+       
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if os.path.islink(file_path):
+                    continue
+                creation_time = os.path.getmtime(file_path)
+                if creation_time <= days_ago:
+                    logger.info("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
+                        node_id, version, file_path, str(time.ctime(creation_time)))
+                    os.remove(file_path)
+    except Exception as e:
+        logger.warning("Fabric: %s, Node: %s, Version: %s, clean_directory exception occurred %s", fabric_domain, node_id, version, e)
+    finally:
+        logger.deubg("clean_directory Execution completed. continue")
+
+
 class LogFileSyncer:
     def __init__(self, node_id, targetIp, user_name, version):
         self.user_name = user_name
@@ -384,6 +422,9 @@ class LogFileSyncer:
             logger.debug(snapshot_cmd)
             get_cmd(snapshot_cmd)
 
+            #clean-up the files before sync-up
+            clean_directory(self.node_id,self.version,older_than=LOG_OLD_THAN)
+
             # Archive the snapshot without overwrite existing file.
 
             sync_dirs = [remote_path]
@@ -393,7 +434,7 @@ class LogFileSyncer:
                     relative_path = temp_dir.replace(self.active_dir, '/') + '/'
                     if relative_path in self.remote_path_local_path:
                         sync_dirs.append(relative_path)
-
+            
             for dir in sync_dirs:
                 logger.debug("working on dir %s " % dir)
                 if self.remote_path_local_path.get(dir).get("incremental"):
@@ -590,29 +631,6 @@ def pull_directory(node_id, target_ip, version, user_name, remote_path, tech=Fal
         logger.debug("pull_directory Execution completed. continue")
 
 
-def clean_directory(node_id,version,older_than):
-    try:
-        now = time.time()
-        days_ago = now - timedelta(days=older_than).total_seconds()
-        directory=fabric_domain + '/' + node_id + '/' + version + '/' + 'archive/'
-        logger.info("cleanning Fabric %s, Node: %s , Directory %s", fabric_domain, node_id, directory)
-       
-        for root, dirs, files in os.walk(directory):
-            for file in files:
-                file_path = os.path.join(root, file)
-                if os.path.islink(file_path):
-                    continue
-                creation_time = os.path.getmtime(file_path)
-                if creation_time <= days_ago:
-                    logger.info("Fabric: %s, Node: %s, Version: %s, Removed: %s, Created: %s", fabric_domain, 
-                        node_id, version, file_path, str(time.ctime(creation_time)))
-                    os.remove(file_path)
-    except Exception as e:
-        logger.warning("Fabric: %s, Node: %s, Version: %s, clean_directory exception occurred %s", fabric_domain, node_id, version, e)
-    finally:
-        logger.deubg("clean_directory Execution completed. continue")
-
-
 def batch_work(work):
     threads = []
 
@@ -727,7 +745,6 @@ if __name__ == '__main__':
                     logger.warning("node %s is bypassed due to target IP %s",node_id,target_ip)
                     continue    
 
-
                  
                 '''
                 /var/sysmgr/tmp_logs/                  - normal copy                       - 15 minutes
@@ -757,11 +774,6 @@ if __name__ == '__main__':
                                  args=(node_id, target_ip, version, user_name, '', True,))
                 timer3.start()
                 logger.debug("Timer for scan tech-support flag files Started for node %s" % node_id)
-
-                timer4 = TimerCb(3600, clean_directory,
-                                 args=(node_id, version, LOG_OLD_THAN))
-                timer4.start()
-                logger.debug("Timer for clean-up 15+ days older log files Started for node %s" % node_id)
 
                 logger.info("Regular log saving timer started for node %s" % node_id)
                 
