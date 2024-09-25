@@ -21,6 +21,8 @@ urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 fabric_domain = ''
 LOG_OLD_THAN = 15
+user_name = ''
+user_pass = ''
 
 def get_cmd(*cmd, **kwargs):
     """Simple interface to subprocess.Pipe()
@@ -120,7 +122,7 @@ class APIC:
         else:
             logger.error('Incorrect Credential,Failed to authenticate')
             sys.exit(1)
-            return None
+
 
     def get_policy(self, url):
         if len(self.auth_result) == 3:
@@ -147,7 +149,6 @@ class APIC:
         if topSystemMo is None:
             logger.info("Failed to Get topSystemMo Policy")
             sys.exit(0)
-            return
         else:
             topSystemData = topSystemMo.get('imdata')
             for MoEntry in topSystemData:
@@ -331,12 +332,16 @@ class LogFileSyncer:
                     "override": True,
                 },
         }
-        self.ssh_option = self.fabric_name+ '/.id_rsa -o UserKnownHostsFile=/dev/null -o GSSAPIAuthentication=no -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=60'
-        #self.rsync = '/usr/bin/sshpass -p \'%s\' /usr/bin/rsync ' % self.pass_word
-        self.rsync = '/usr/bin/rsync '
+        if len(user_pass)==0:
+            self.ssh_option = self.fabric_name+ '/.id_rsa -o UserKnownHostsFile=/dev/null -o GSSAPIAuthentication=no -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=60'
+            self.show_tech = '/usr/bin/ssh -i ' + self.ssh_option + ' ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
+            self.rsync = '/usr/bin/rsync '
+        else:
+            self.ssh_option = '"ssh -o PreferredAuthentications=password"'
+            self.show_tech = '/usr/bin/sshpass -p \'' + user_pass + '\' /usr/bin/ssh ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
+            self.rsync =  '/usr/bin/sshpass -p \'' + user_pass + '\' /usr/bin/rsync '
+
         self.local_rsync = ' /usr/bin/rsync '
-        #self.show_tech = '/usr/bin/sshpass -p \'' + self.pass_word + '\' /usr/bin/ssh ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
-        self.show_tech = '/usr/bin/ssh -i ' + self.ssh_option + ' ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
         self.pre_init()
 
     def pre_init(self):
@@ -418,10 +423,14 @@ class LogFileSyncer:
             if self.remote_path_local_path.get(remote_path).get("override"):
                 snapshot_cmd = snapshot_cmd + ' --delete-during '
 
-            snapshot_cmd = snapshot_cmd + ' -e \" ssh -i ' + self.ssh_option + ' \"  ' \
+            if len(user_pass)>0:
+                snapshot_cmd = snapshot_cmd + ' -e  ' + self.ssh_option + '  ' \
                            + self.user_name + '@' + self.targetIp + ':' + remote_path + ' ' + local_active_path
+            else:
+                snapshot_cmd = snapshot_cmd + ' -e \" ssh -i ' + self.ssh_option + ' \"  ' \
+                               + self.user_name + '@' + self.targetIp + ':' + remote_path + ' ' + local_active_path
+                logger.debug(snapshot_cmd)
 
-            logger.debug(snapshot_cmd)
             get_cmd(snapshot_cmd)
 
             #clean-up the files before sync-up
@@ -618,6 +627,7 @@ def pull_directory(node_id, target_ip, version, user_name, remote_path, tech=Fal
     try:
         work_list = []
         fileSyncer = LogFileSyncer(node_id, target_ip, user_name,  version)
+
         if tech:
             flag_file = fabric_domain + "_" + version + "_" + node_id
             if os.path.exists(flag_file):
@@ -627,10 +637,11 @@ def pull_directory(node_id, target_ip, version, user_name, remote_path, tech=Fal
             work_list.append((fileSyncer.snapShotCopy, (remote_path,)), )
         if len(work_list) >= 1:
             batch_work(work_list)
+
     except Exception as e:
         logger.warning("Fabric: %s, Node: %s, Version: %s, pull_directory exception occurred %s", fabric_domain, node_id, version, e)
     finally:
-        logger.debug("pull_directory Execution completed. continue")
+        logger.debug("pull_directory passed to worker thread. continue")
 
 
 def batch_work(work):
@@ -644,6 +655,32 @@ def batch_work(work):
         t.join()
     return
 
+def first_time_setup(apic_ip,user_name,user_pass):
+    fabric_node = APIC(apic_ip, user_name, user_pass)
+    if fabric_node is not None:
+        fabric_node.get_name_list_with_ip()
+        fnode_dict = fabric_node.nodeDict
+        fabric_domain = fnode_dict.get('fabricDomain')
+        fabric_node.save_fnode_json()
+        if not os.path.exists(fabric_domain):
+            os.makedirs(fabric_domain, exist_ok=True)
+        logfile = fabric_domain + '/script.log'
+        setup_logger(logger, args.debug, logfile)
+        ssh_rsa = fabric_domain + "/.id_rsa"
+        if os.path.exists(ssh_rsa):
+            logger.warning("Found private key file %s ", ssh_rsa)
+        else:
+            ssh_key_cmd = ' /usr/bin/ssh-keygen -t rsa -q -f ' + ssh_rsa + ' -N "" '
+            logger.debug(ssh_key_cmd)
+            get_cmd(ssh_key_cmd)
+        ssh_pub = ssh_rsa + '.pub'
+        if os.path.exists(ssh_pub):
+            logger.info("Add the ssh-pub key below to user %s on %s", user_name, apic_ip)
+            with open(ssh_pub, 'r') as f:
+                print(f.read())
+
+        logger.info("\nUsage: nohup python3 logsavor -f %s -u %s &", fabric_domain, user_name)
+        sys.exit()
 
 
 
@@ -657,15 +694,27 @@ if __name__ == '__main__':
     parser.add_argument("-f", dest="fabric",help="fabric name ", default=None)
     parser.add_argument("-s", dest="setup",action="store_true", help="setup the script ", default=False)
     parser.add_argument("-c", dest="connect",choices=["oob", "inb", ], default="oob")
+    parser.add_argument("-k", dest="key", help="ssh pubkey or password", default=False) #password auth
 
     args = parser.parse_args()
 
     apic_ip = args.host
-
+    #first-time setup with ssh pubkey authentication
     if args.setup and args.host:
         if args.user is not None:
             user_name = args.user
-        user_name = input("Username: ").strip()
+        else:
+            user_name = input("Username: ").strip()
+        user_pass = getpass.getpass("PassWord:")
+        first_time_setup(apic_ip,user_name,user_pass)
+        sys.exit(0)
+
+    fnode_dict={}
+
+    if args.host and not args.key:
+        if args.user is None:
+            user_name = input("Username: ").strip()
+
         user_pass = getpass.getpass("PassWord:")
         fabric_node = APIC(apic_ip, user_name, user_pass)
         if fabric_node is not None:
@@ -674,63 +723,48 @@ if __name__ == '__main__':
             fabric_domain = fnode_dict.get('fabricDomain')
             fabric_node.save_fnode_json()
             if not os.path.exists(fabric_domain):
-                os.makedirs(fabric_domain,exist_ok=True)
-            logfile = fabric_domain + '/script.log'
-            setup_logger(logger, args.debug,logfile)
-            ssh_rsa = fabric_domain + "/.id_rsa"
-            if os.path.exists(ssh_rsa):
-                logger.warning("Found private key file %s ",ssh_rsa)
-            else:
-                ssh_key_cmd = ' /usr/bin/ssh-keygen -t rsa -q -f ' + ssh_rsa + ' -N "" '
-                logger.debug(ssh_key_cmd)
-                get_cmd(ssh_key_cmd)
-            ssh_pub = ssh_rsa + '.pub'
-            if os.path.exists(ssh_pub):
-                logger.info("Add the ssh-pub key below to user %s on %s",user_name,apic_ip)
-                with open(ssh_pub,'r') as f:
-                    print(f.read())
-
-            logger.info("\nUsage: nohup python3 logsavor -f %s -u %s &",fabric_domain,user_name)
-            sys.exit()
-
-
-    collect_tech = args.tech
-    fnode_dict = {}
-    if args.fabric is not None:
-        fabric_domain = args.fabric
-        fnode_json_file = fabric_domain + '/fabric_node.json'
-        if os.path.exists(fabric_domain):
+                os.makedirs(fabric_domain, exist_ok=True)
             logfile = fabric_domain + '/script.log'
             setup_logger(logger, args.debug, logfile)
-            if os.path.exists(fnode_json_file):
-                fnode_dict = load_json_fnode(fnode_json_file)
+
+    elif args.host and args.key:
+        collect_tech = args.tech
+        fnode_dict = {}
+        if args.fabric is not None:
+            fabric_domain = args.fabric
+            fnode_json_file = fabric_domain + '/fabric_node.json'
+            if os.path.exists(fabric_domain):
+                logfile = fabric_domain + '/script.log'
+                setup_logger(logger, args.debug, logfile)
+                if os.path.exists(fnode_json_file):
+                    fnode_dict = load_json_fnode(fnode_json_file)
+                else:
+                    logger.warning("fabric configuration %s not found", fnode_json_file)
+                    sys.exit(0)
             else:
-                logger.warning("fabric configuration %s not found", fnode_json_file)
+                print("Please setup the script first\n python3 logsavor -s -i apic_ip")
                 sys.exit(0)
         else:
-            print("Please setup the script first\n python3 logsavor -s -i apic_ip")
+            print("usage: python3 logsavor -f fabric_domain_name -u user_name")
             sys.exit(0)
-    else:
-        print("usage: python3 logsavor -f fabric_domain_name -u user_name")
-        sys.exit(0)
 
-    if args.node is not None and len(args.node)>=1 and collect_tech:
-        fabric_domain = fnode_dict.get('fabricDomain')
-        for node_id in args.node:
-            if node_id in fnode_dict:
-                target_ip = fnode_dict[node_id].get('oobMgmtAddr')
-                if args.connect=="inb":
-                    target_ip = fnode_dict[node_id].get('inbMgmtAddr')
-                version = fnode_dict[node_id].get('version')
-                flag_file = fabric_domain + "_" + version + "_" + node_id
-                with open(flag_file, 'w') as file:
-                    logger.info("Tech-support for node %s should start within 30 seconds",node_id)
-                    sys.exit(0)
+        if args.node is not None and len(args.node)>=1 and collect_tech:
+            fabric_domain = fnode_dict.get('fabricDomain')
+            for node_id in args.node:
+                if node_id in fnode_dict:
+                    target_ip = fnode_dict[node_id].get('oobMgmtAddr')
+                    if args.connect=="inb":
+                        target_ip = fnode_dict[node_id].get('inbMgmtAddr')
+                    version = fnode_dict[node_id].get('version')
+                    flag_file = fabric_domain + "_" + version + "_" + node_id
+                    with open(flag_file, 'w') as file:
+                        logger.info("Tech-support for node %s should start within 30 seconds",node_id)
+                        sys.exit(0)
 
-    if args.user is not None:
-        user_name = args.user
-    else:
-        user_name = input("Username whose ssh pub-key is deployed to APIC: ").strip()
+        if args.user is not None:
+            user_name = args.user
+        else:
+            user_name = input("Username whose ssh pub-key is deployed to APIC: ").strip()
     try:
         for node_id in fnode_dict:
             if node_id == 'fabricDomain':
@@ -745,15 +779,15 @@ if __name__ == '__main__':
                 
                 if target_ip == '0.0.0.0':
                     logger.warning("node %s is bypassed due to target IP %s",node_id,target_ip)
-                    continue    
+                    continue
 
                 '''
                 /var/sysmgr/tmp_logs/                  - normal copy                       - 15 minutes
                 /var/sysmgr/tmp_logs/nxos/             - normal copy                        - 15 minutes
                 /var/sysmgr/tmp_logs/old/              - incremental copy for all files.   - 15 minutes
                 /var/sysmgr/tmp_logs/dme_logs/         - symbol link copy --safe-links     - 15 minutes
-                '''
-                # sync-up /var/sysmgr/tmp_logs/*  every two minutes.
+               '''
+                # sync-up /var/sysmgr/tmp_logs/*  every 15 minutes.
                 
                 timer1 = TimerCb(900, pull_directory,
                                  args=(node_id, target_ip, version, user_name,  '/var/sysmgr/tmp_logs/',))
@@ -778,6 +812,6 @@ if __name__ == '__main__':
                 logger.debug("Timer for scan tech-support flag files Started for node %s" % node_id)
                 
                 logger.info("Regular log saving timer started for node %s" % node_id)
-                
+
     except KeyboardInterrupt as e:
         sys.exit("\Ctrl-c Pressed,Bye\n")
