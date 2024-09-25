@@ -51,3 +51,17 @@ admin@ubuntu:~/demo$ python3 logsavor -f  FabricA -n 101 -t
 PDT 2023-04-17T01:26:34.775||INFO||(185)||loading json file: CAP1/fabric_node.json
 PDT 2023-04-17T01:26:34.790||INFO||(193)||18 records loaded from CAP1/fabric_node.json
 PDT 2023-04-17T01:26:34.790||INFO||(697)||Tech-support for node 101 should start within 30 seconds
+
+
+If username and password authentication is preferred, and provided user is able to pull log files from switch, here is the usage.
+
+
+admin@ubuntu:~/demo$ python3 logsavor  -i apic_server_ip 
+
+After input username and password, the script will start running. 
+
+Ctrl+Z (suspend the process), then type two clis  below:
+
+bg (restart the process in the background)
+
+disown %1 (assuming this is job #1, use jobs to determine).
