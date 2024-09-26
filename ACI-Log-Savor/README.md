@@ -56,12 +56,30 @@ PDT 2023-04-17T01:26:34.790||INFO||(697)||Tech-support for node 101 should start
 If username and password authentication is preferred, and provided user is able to pull log files from switch, here is the usage.
 
 
-admin@ubuntu:~/demo$ python3 logsavor  -i apic_server_ip 
+admin@ubuntu:~/demo$ python3 ./logsavor -i 192.168.68.140
+Username: read
+PassWord:
+PDT 2024-09-25T23:15:40.090||INFO||(814)||Regular log saving timer started for node 101
+PDT 2024-09-25T23:15:40.091||INFO||(814)||Regular log saving timer started for node 102
+PDT 2024-09-25T23:15:40.092||INFO||(814)||Regular log saving timer started for node 103
+PDT 2024-09-25T23:15:40.094||INFO||(814)||Regular log saving timer started for node 104
+PDT 2024-09-25T23:15:40.095||INFO||(814)||Regular log saving timer started for node 109
+PDT 2024-09-25T23:15:40.096||INFO||(814)||Regular log saving timer started for node 202
+PDT 2024-09-25T23:15:40.097||INFO||(814)||Regular log saving timer started for node 201
+PDT 2024-09-25T23:15:40.098||INFO||(814)||Regular log saving timer started for node 203
+PDT 2024-09-25T23:15:40.099||INFO||(814)||Regular log saving timer started for node 301
+PDT 2024-09-25T23:15:40.101||INFO||(814)||Regular log saving timer started for node 302
+PDT 2024-09-25T23:15:40.102||INFO||(814)||Regular log saving timer started for node 701
+PDT 2024-09-25T23:15:40.103||INFO||(814)||Regular log saving timer started for node 702
+PDT 2024-09-25T23:15:40.104||INFO||(814)||Regular log saving timer started for node 703
+PDT 2024-09-25T23:15:40.105||INFO||(814)||Regular log saving timer started for node 801
+PDT 2024-09-25T23:15:40.107||INFO||(814)||Regular log saving timer started for node 802
+^Z
+[1]+  Stopped                 python3 ./logsavor -i 192.168.68.140
+tianhe@aci-logviewer:~$ bg
+[1]+ python3 ./logsavor -i 192.168.68.140 &
+tianhe@aci-logviewer:~$ jobs -l
+[1]+  9734 Running                 python3 ./logsavor -i 192.168.68.140
+tianhe@aci-logviewer:~$ disown -h %1
 
-After input username and password, the script will start running. 
-
-Ctrl+Z (suspend the process), then type two clis  below:
-
-bg (restart the process in the background)
-
-disown %1 (assuming this is job #1, use jobs to determine).
+with that, even the user logged out the ssh session, the script can continue running from backend.
