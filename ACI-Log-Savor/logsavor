@@ -714,7 +714,8 @@ if __name__ == '__main__':
     if args.host and not args.key:
         if args.user is None:
             user_name = input("Username: ").strip()
-
+        else:
+            user_name = args.user
         user_pass = getpass.getpass("PassWord:")
         fabric_node = APIC(apic_ip, user_name, user_pass)
         if fabric_node is not None:
