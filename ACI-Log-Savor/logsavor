@@ -796,7 +796,7 @@ if __name__ == '__main__':
 
                 # sync-up /var/sysmgr/tmp_logs/*  every 15 minutes.
                 
-                timer1 = TimerCb(900, pull_directory,
+                timer1 = TimerCb(3600, pull_directory,
                                  args=(node_id, target_ip, version, user_name,  '/var/sysmgr/tmp_logs/',))
                 timer1.start()
                 logger.debug("Timer for sync-up /var/sysmgr/tmp_logs/ Started for Node %s" % node_id)
@@ -806,7 +806,7 @@ if __name__ == '__main__':
                 #/var/log/dme/oldlog/show_tech_info/*    - show techsupport                  - 30 minutes
                 # sync-up /var/log/dme/oldlog/* every 30 minutes incremental copy for *.old.*.gz
                 
-                timer2 = TimerCb(1800, pull_directory,
+                timer2 = TimerCb(7200, pull_directory,
                                  args=(node_id, target_ip, version, user_name,  '/var/log/dme/oldlog/',))
                 timer2.start()
                 logger.debug("Timer for sync-up /var/log/dme/oldlog/ Started for Node %s" % node_id)
