@@ -337,7 +337,7 @@ class LogFileSyncer:
             self.show_tech = '/usr/bin/ssh -i ' + self.ssh_option + ' ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
             self.rsync = '/usr/bin/rsync '
         else:
-            self.ssh_option = '"ssh -o PreferredAuthentications=password"'
+            self.ssh_option = '"ssh -o PreferredAuthentications=password  -o StrictHostKeyChecking=no"'
             self.show_tech = '/usr/bin/sshpass -p \'' + user_pass + '\' /usr/bin/ssh ' + self.user_name + '@' + self.targetIp + ' \' vsh -c \"show tech-support\" \''
             self.rsync =  '/usr/bin/sshpass -p \'' + user_pass + '\' /usr/bin/rsync '
 
@@ -376,6 +376,10 @@ class LogFileSyncer:
             logger.warning("/usr/bin/ssh can't find, install it and run again")
             sys.exit()
 
+        if not os.path.exists('/usr/bin/sshpass'):
+            logger.warning("/usr/bin/sshpass can't find, install it and run again")
+            sys.exit()
+
         if os.path.exists('/usr/bin/tar'):
             self.tar_cli = '/usr/bin/tar'
         elif os.path.exists('/bin/tar'):
@@ -383,6 +387,7 @@ class LogFileSyncer:
         else:
             logger.warning("tar can't find, install it and run again")
             sys.exit(0)
+
 
         if os.path.exists('/usr/bin/rm'):
             self.rm_cli = '/usr/bin/rm'
@@ -429,7 +434,8 @@ class LogFileSyncer:
             else:
                 snapshot_cmd = snapshot_cmd + ' -e \" ssh -i ' + self.ssh_option + ' \"  ' \
                                + self.user_name + '@' + self.targetIp + ':' + remote_path + ' ' + local_active_path
-                logger.debug(snapshot_cmd)
+
+            logger.debug(snapshot_cmd)
 
             get_cmd(snapshot_cmd)
 
