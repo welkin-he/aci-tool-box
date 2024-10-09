@@ -358,11 +358,9 @@ class LogFileSyncer:
             logger.warning("cp can't find, install it and run again")
             sys.exit()
 
-        '''
         if not os.path.exists('/usr/bin/sshpass'):
             logger.warning("/usr/bin/sshpass can't find, install it and run again")
             sys.exit()
-        '''
 
         if os.path.exists('/usr/bin/tar'):
             self.tar_cli = '/usr/bin/tar'
@@ -374,10 +372,6 @@ class LogFileSyncer:
 
         if not os.path.exists('/usr/bin/ssh'):
             logger.warning("/usr/bin/ssh can't find, install it and run again")
-            sys.exit()
-
-        if not os.path.exists('/usr/bin/sshpass'):
-            logger.warning("/usr/bin/sshpass can't find, install it and run again")
             sys.exit()
 
         if os.path.exists('/usr/bin/tar'):
