@@ -800,12 +800,10 @@ if __name__ == '__main__':
                                  args=(node_id, target_ip, version, user_name,  '/var/sysmgr/tmp_logs/',))
                 timer1.start()
                 logger.debug("Timer for sync-up /var/sysmgr/tmp_logs/ Started for Node %s" % node_id)
-                
 
                 #/var/log/dme/oldlog/*                   - incremental copy for *.old.*.gz   - 30 minutes
                 #/var/log/dme/oldlog/dme/*               - dme logs                          - 30 minutes
                 #/var/log/dme/oldlog/show_tech_info/*    - show techsupport                  - 30 minutes
-
                 # sync-up /var/log/dme/oldlog/* every 30 minutes incremental copy for *.old.*.gz
                 
                 timer2 = TimerCb(1800, pull_directory,
